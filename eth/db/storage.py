@@ -25,6 +25,10 @@ from trie import (
     HexaryTrie,
     exceptions as trie_exceptions,
 )
+from web3 import Web3
+from web3.types import (
+    BlockIdentifier,
+)
 
 from eth._utils.padding import (
     pad32,
@@ -59,6 +63,7 @@ from eth.vm.interrupt import (
     MissingStorageTrieNode,
 )
 
+ZERO_VALUE = b'\x00' * 32
 
 class PendingWrites(NamedTuple):
     """
@@ -93,103 +98,55 @@ class StorageLookup(BaseDB):
     # each delete.
     _historical_write_tries: List[PendingWrites]
 
-    def __init__(self, db: DatabaseAPI, storage_root: Hash32, address: Address) -> None:
+    def __init__(
+            self,
+            db: DatabaseAPI,
+            w3: Web3,
+            block_identifier: BlockIdentifier,
+            address: Address
+        ) -> None:
         self._db = db
-
-        # Set the starting root hash, to be used for on-disk storage read lookups
-        self._initialize_to_root_hash(storage_root)
-
+        self._w3 = w3
+        self._block_identifier = block_identifier
         self._address = address
 
-    def _get_write_trie(self) -> HexaryTrie:
-        if self._trie_nodes_batch is None:
-            self._trie_nodes_batch = BatchDB(self._db, read_through_deletes=True)
-
-        if self._write_trie is None:
-            batch_db = self._trie_nodes_batch
-            self._write_trie = HexaryTrie(
-                batch_db, root_hash=self._starting_root_hash, prune=True
-            )
-
-        return self._write_trie
-
-    def _get_read_trie(self) -> HexaryTrie:
-        if self._write_trie is not None:
-            return self._write_trie
-        else:
-            # Creating "HexaryTrie" is a pretty light operation, so not a huge cost
-            # to create a new one at every read, but we could
-            # cache the read trie, if this becomes a bottleneck.
-            return HexaryTrie(self._db, root_hash=self._starting_root_hash)
-
-    def _decode_key(self, key: bytes) -> bytes:
-        padded_slot = pad32(key)
-        return keccak(padded_slot)
+    def _make_db_key(self, key: bytes) -> bytes:
+        return b'storage' + bytes(self._address) + key
 
     def __getitem__(self, key: bytes) -> bytes:
-        hashed_slot = self._decode_key(key)
-        read_trie = self._get_read_trie()
-        try:
-            return read_trie[hashed_slot]
-        except trie_exceptions.MissingTrieNode as exc:
-            raise MissingStorageTrieNode(
-                exc.missing_node_hash,
-                self._starting_root_hash,
-                exc.requested_key,
-                exc.prefix,
+        k = self._make_db_key(key)
+
+        if k not in self._db:
+            val = self._w3.eth.get_storage_at(
                 self._address,
-            ) from exc
+                to_int(key),
+                block_identifier=self._block_identifier
+            )
+            self._db[k] = val
+        
+        return self._db[k]
 
     def __setitem__(self, key: bytes, value: bytes) -> None:
-        hashed_slot = self._decode_key(key)
-        write_trie = self._get_write_trie()
-        write_trie[hashed_slot] = value
+        k = self._make_db_key(key)
+        self._db[k] = value
 
     def _exists(self, key: bytes) -> bool:
         # used by BaseDB for __contains__ checks
+        raise NotImplementedError("StorageLookup does not support __contains__")
         hashed_slot = self._decode_key(key)
         read_trie = self._get_read_trie()
         return hashed_slot in read_trie
 
     def __delitem__(self, key: bytes) -> None:
-        hashed_slot = self._decode_key(key)
-        write_trie = self._get_write_trie()
-        try:
-            del write_trie[hashed_slot]
-        except trie_exceptions.MissingTrieNode as exc:
-            raise MissingStorageTrieNode(
-                exc.missing_node_hash,
-                self._starting_root_hash,
-                exc.requested_key,
-                exc.prefix,
-                self._address,
-            ) from exc
-
-    @property
-    def has_changed_root(self) -> bool:
-        return self._write_trie is not None
-
-    def get_changed_root(self) -> Hash32:
-        if self._write_trie is not None:
-            return self._write_trie.root_hash
-        else:
-            raise ValidationError(
-                "Asked for changed root when no writes have been made"
-            )
-
-    def _initialize_to_root_hash(self, root_hash: Hash32) -> None:
-        self._starting_root_hash = root_hash
-        self._write_trie = None
-        self._trie_nodes_batch = None
-
-        # Reset the historical writes, which can't be reverted after committing
-        self._historical_write_tries = []
+        k = self._make_db_key(key)
+        self._db[k] = ZERO_VALUE
 
     def commit_to(self, db: DatabaseAPI) -> None:
         """
         Trying to commit changes when nothing has been written will raise a
         ValidationError
         """
+        raise NotImplementedError("StorageLookup does not support commit_to")
         self.logger.debug2("persist storage root to data store")
         if self._trie_nodes_batch is None:
             raise ValidationError(
@@ -212,6 +169,7 @@ class StorageLookup(BaseDB):
 
         :return: index for reviving the previous trie
         """
+        raise NotImplementedError("StorageLookup does not support new_trie")
         write_trie = self._get_write_trie()
 
         # Write the previous trie into a historical stack
@@ -264,7 +222,11 @@ class AccountStorageDB(AccountStorageDatabaseAPI):
     logger = get_extended_debug_logger("eth.db.storage.AccountStorageDB")
 
     def __init__(
-        self, db: AtomicDatabaseAPI, storage_root: Hash32, address: Address
+        self,
+        db: AtomicDatabaseAPI,
+        w3: Web3,
+        block_identifier: BlockIdentifier,
+        address: Address
     ) -> None:
         """
         Database entries go through several pipes, like so...
@@ -300,7 +262,7 @@ class AccountStorageDB(AccountStorageDatabaseAPI):
         big_endian encoding of the slot integer, and the rlp-encoded value.
         """
         self._address = address
-        self._storage_lookup = StorageLookup(db, storage_root, address)
+        self._storage_lookup = StorageLookup(db, w3, block_identifier, address)
         self._storage_cache = CacheDB(self._storage_lookup)
         self._locked_changes = JournalDB(self._storage_cache)
         self._journal_storage = JournalDB(self._locked_changes)
@@ -316,22 +278,27 @@ class AccountStorageDB(AccountStorageDatabaseAPI):
         self._accessed_slots.add(slot)
         key = int_to_big_endian(slot)
         lookup_db = self._journal_storage if from_journal else self._locked_changes
-        try:
-            encoded_value = lookup_db[key]
-        except MissingStorageTrieNode:
-            raise
-        except KeyError:
-            return 0
 
-        if encoded_value == b"":
-            return 0
-        else:
-            return rlp.decode(encoded_value, sedes=rlp.sedes.big_endian_int)
+        try:
+            v = lookup_db[key]
+            if v == b"":
+                ret = 0
+            else:
+                ret = int.from_bytes(v, 'big', signed=False)
+        except KeyError:
+            ret = 0
+
+        if bytes(self._address).hex().startswith('6a9e4959'):
+            print(f'{self._address.hex()} storage get {hex(slot)} = {hex(ret)}')
+
+        return ret
 
     def set(self, slot: int, value: int) -> None:
+        if bytes(self._address).hex().startswith('6a9e4959'):
+            print(f'{self._address.hex()} storage set {hex(slot)} to {hex(value)}')
         key = int_to_big_endian(slot)
         if value:
-            self._journal_storage[key] = rlp.encode(value)
+            self._journal_storage[key] = value.to_bytes(32, 'big', signed=False)
         else:
             try:
                 current_val = self._journal_storage[key]
@@ -344,6 +311,9 @@ class AccountStorageDB(AccountStorageDatabaseAPI):
                     del self._journal_storage[key]
 
     def delete(self) -> None:
+        if bytes(self._address).hex().startswith('6a9e4959'):
+            print(f'{self._address.hex()} storage DELETE')
+
         self.logger.debug2(
             "Deleting all storage in account 0x%s",
             self._address.hex(),
@@ -351,20 +321,19 @@ class AccountStorageDB(AccountStorageDatabaseAPI):
         self._journal_storage.clear()
         self._storage_cache.reset_cache()
 
-        # Empty out the storage lookup trie (keeping history, in case of a revert)
-        new_clear_count = self._storage_lookup.new_trie()
-
         # Look up the previous count of how many times the account has been deleted.
         # This can happen multiple times in one block, via CREATE2.
         old_clear_count = to_int(self._clear_count[CLEAR_COUNT_KEY_NAME])
+        new_clear_count = old_clear_count + 1
 
-        # Gut check that we have incremented correctly
-        if new_clear_count != old_clear_count + 1:
-            raise ValidationError(
-                f"Must increase clear count by one on each delete. Instead, went from"
-                f" {old_clear_count} -> {new_clear_count} in account"
-                f" 0x{self._address.hex()}"
-            )
+        # NOTE: below is now meaningless (since I deleted the old code that gets new_clear_count)
+        # # Gut check that we have incremented correctly
+        # if new_clear_count != old_clear_count + 1:
+        #     raise ValidationError(
+        #         f"Must increase clear count by one on each delete. Instead, went from"
+        #         f" {old_clear_count} -> {new_clear_count} in account"
+        #         f" 0x{self._address.hex()}"
+        #     )
 
         # Save the new count, ie~ the index used for a future revert.
         self._clear_count[CLEAR_COUNT_KEY_NAME] = to_bytes(new_clear_count)

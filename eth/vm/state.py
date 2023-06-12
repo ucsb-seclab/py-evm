@@ -41,7 +41,10 @@ from eth.constants import (
 from eth.typing import (
     JournalDBCheckpoint,
 )
-
+from web3 import Web3
+from web3.types import (
+    BlockIdentifier,
+)
 
 class BaseState(Configurable, StateAPI):
     #
@@ -56,13 +59,12 @@ class BaseState(Configurable, StateAPI):
 
     def __init__(
         self,
-        db: AtomicDatabaseAPI,
+        web3: Web3,
+        block_identifier: BlockIdentifier,
         execution_context: ExecutionContextAPI,
-        state_root: Hash32,
     ) -> None:
-        self._db = db
         self.execution_context = execution_context
-        self._account_db = self.get_account_db_class()(db, state_root)
+        self._account_db = self.get_account_db_class()(web3, block_identifier)
 
     #
     # Logging
@@ -136,9 +138,11 @@ class BaseState(Configurable, StateAPI):
         return self._account_db.set_storage(address, slot, value)
 
     def delete_storage(self, address: Address) -> None:
+        print('delete_storage', address.hex())
         self._account_db.delete_storage(address)
 
     def delete_account(self, address: Address) -> None:
+        print('delete_account', address.hex())
         self._account_db.delete_account(address)
 
     def get_balance(self, address: Address) -> int:
@@ -206,19 +210,17 @@ class BaseState(Configurable, StateAPI):
     #
     # Access self._chaindb
     #
-    def snapshot(self) -> Tuple[Hash32, JournalDBCheckpoint]:
-        return self.state_root, self._account_db.record()
+    def snapshot(self) -> Tuple[JournalDBCheckpoint,]:
+        return (self._account_db.record(),)
 
-    def revert(self, snapshot: Tuple[Hash32, JournalDBCheckpoint]) -> None:
-        state_root, account_snapshot = snapshot
+    def revert(self, snapshot: Tuple[JournalDBCheckpoint,]) -> None:
+        (account_snapshot,) = snapshot
 
-        # first revert the database state root.
-        self._account_db.state_root = state_root
         # now roll the underlying database back
         self._account_db.discard(account_snapshot)
 
-    def commit(self, snapshot: Tuple[Hash32, JournalDBCheckpoint]) -> None:
-        _, account_snapshot = snapshot
+    def commit(self, snapshot: Tuple[JournalDBCheckpoint]) -> None:
+        (account_snapshot,) = snapshot
         self._account_db.commit(account_snapshot)
 
     def lock_changes(self) -> None:

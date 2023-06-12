@@ -70,6 +70,7 @@ from eth.db.witness import (
 )
 from eth.rlp.accounts import (
     Account,
+    LazyAccount,
 )
 from eth.typing import (
     JournalDBCheckpoint,
@@ -89,6 +90,11 @@ from .hash_trie import (
     HashTrie,
 )
 
+from web3 import Web3
+from web3.types import (
+    BlockIdentifier,
+)
+
 IS_PRESENT_VALUE = b""
 
 
@@ -96,7 +102,7 @@ class AccountDB(AccountDatabaseAPI):
     logger = get_extended_debug_logger("eth.db.account.AccountDB")
 
     def __init__(
-        self, db: AtomicDatabaseAPI, state_root: Hash32 = BLANK_ROOT_HASH
+        self, w3: Web3, block_identifier: BlockIdentifier
     ) -> None:
         r"""
         Internal implementation details (subject to rapid change):
@@ -135,18 +141,13 @@ class AccountDB(AccountDatabaseAPI):
         AccountDB synchronizes the snapshot/revert/persist of both of the
         journals.
         """
-        self._raw_store_db = KeyAccessLoggerAtomicDB(db, log_missing_keys=False)
-        self._batchdb = BatchDB(self._raw_store_db)
-        self._batchtrie = BatchDB(self._raw_store_db, read_through_deletes=True)
-        self._journaldb = JournalDB(self._batchdb)
-        self._trie = HashTrie(HexaryTrie(self._batchtrie, state_root, prune=True))
-        self._trie_logger = KeyAccessLoggerDB(self._trie, log_missing_keys=False)
-        self._trie_cache = CacheDB(self._trie_logger)
-        self._journaltrie = JournalDB(self._trie_cache)
-        self._account_cache = LRU(2048)
+        print('making fresh account db')
+        self.w3 = w3
+        self.block_identifier = block_identifier
+        self._journaldb = JournalDB(KeyAccessLoggerAtomicDB(MemoryDB()))
+        self._account_cache = LRU(1024 * 10)
         self._account_stores: Dict[Address, AccountStorageDatabaseAPI] = {}
         self._dirty_accounts: Set[Address] = set()
-        self._root_hash_at_last_persist = state_root
         self._accessed_accounts: Set[Address] = set()
         self._accessed_bytecodes: Set[Address] = set()
         # Track whether an account or slot have been accessed
@@ -155,15 +156,18 @@ class AccountDB(AccountDatabaseAPI):
 
     @property
     def state_root(self) -> Hash32:
+        raise NotImplementedError("too lazy to implement this")
         return self._trie.root_hash
 
     @state_root.setter
     def state_root(self, value: Hash32) -> None:
+        raise NotImplementedError("too lazy to implement this")
         if self._trie.root_hash != value:
             self._trie_cache.reset_cache()
             self._trie.root_hash = value
 
     def has_root(self, state_root: bytes) -> bool:
+        raise NotImplementedError("too lazy to implement this")
         return state_root in self._batchtrie
 
     #
@@ -221,8 +225,7 @@ class AccountDB(AccountDatabaseAPI):
         if address in self._account_stores:
             store = self._account_stores[address]
         else:
-            storage_root = self._get_storage_root(address)
-            store = AccountStorageDB(self._raw_store_db, storage_root, address)
+            store = AccountStorageDB({}, self.w3, self.block_identifier, address)
             self._account_stores[address] = store
         return store
 
@@ -292,6 +295,7 @@ class AccountDB(AccountDatabaseAPI):
 
         account = self._get_account(address)
         self._set_account(address, account.copy(nonce=nonce))
+        print(f'setting {address.hex()} nonce to {nonce}')
 
     def increment_nonce(self, address: Address) -> None:
         current_nonce = self.get_nonce(address)
@@ -303,17 +307,30 @@ class AccountDB(AccountDatabaseAPI):
     def get_code(self, address: Address) -> bytes:
         validate_canonical_address(address, title="Storage Address")
 
-        code_hash = self.get_code_hash(address)
-        if code_hash == EMPTY_SHA3:
-            return b""
+        bkey = address + b"code"
+
+        if bkey in self._journaldb:
+            ret = self._journaldb[bkey]
         else:
-            try:
-                return self._journaldb[code_hash]
-            except KeyError:
-                raise MissingBytecode(code_hash) from KeyError
-            finally:
-                if code_hash in self._get_accessed_node_hashes():
-                    self._accessed_bytecodes.add(address)
+            ret = self.w3.eth.get_code(address, block_identifier=self.block_identifier)
+            self._journaldb[bkey] = ret
+        
+        if ret != b"":
+            self._accessed_bytecodes.add(address)
+        
+        return ret
+
+        # code_hash = self.get_code_hash(address)
+        # if code_hash == EMPTY_SHA3:
+        #     return b""
+        # else:
+        #     try:
+        #         return self._journaldb[code_hash]
+        #     except KeyError:
+        #         raise MissingBytecode(code_hash) from KeyError
+        #     finally:
+        #         if code_hash in self._get_accessed_node_hashes():
+        #             self._accessed_bytecodes.add(address)
 
     def set_code(self, address: Address, code: bytes) -> None:
         validate_canonical_address(address, title="Storage Address")
@@ -328,8 +345,9 @@ class AccountDB(AccountDatabaseAPI):
     def get_code_hash(self, address: Address) -> Hash32:
         validate_canonical_address(address, title="Storage Address")
 
-        account = self._get_account(address)
-        return account.code_hash
+        code = self.get_code(address)
+        h = keccak(code)
+        return h
 
     def delete_code(self, address: Address) -> None:
         validate_canonical_address(address, title="Storage Address")
@@ -341,7 +359,7 @@ class AccountDB(AccountDatabaseAPI):
     # Account Methods
     #
     def account_has_code_or_nonce(self, address: Address) -> bool:
-        return self.get_nonce(address) != 0 or self.get_code_hash(address) != EMPTY_SHA3
+        return self.get_nonce(address) != 0 or self.get_code(address) != b''
 
     def delete_account(self, address: Address) -> None:
         validate_canonical_address(address, title="Storage Address")
@@ -354,12 +372,12 @@ class AccountDB(AccountDatabaseAPI):
 
         if address in self._account_cache:
             del self._account_cache[address]
-        del self._journaltrie[address]
 
     def account_exists(self, address: Address) -> bool:
         validate_canonical_address(address, title="Storage Address")
-        account_rlp = self._get_encoded_account(address, from_journal=True)
-        return account_rlp != b""
+        # NOTE: not sure if this works since we technically also 
+        # need to see if the account's storage (storage_root) is empty, I think?
+        return self.account_is_empty(address) is False
 
     def touch_account(self, address: Address) -> None:
         validate_canonical_address(address, title="Storage Address")
@@ -397,24 +415,26 @@ class AccountDB(AccountDatabaseAPI):
             # In case the account is deleted in the JournalDB
             return b""
 
+    @staticmethod
+    def _make_account_journal_key(address: Address) -> bytes:
+        return b'account:' + address
+
     def _get_account(self, address: Address, from_journal: bool = True) -> Account:
         if from_journal and address in self._account_cache:
             return self._account_cache[address]
 
-        rlp_account = self._get_encoded_account(address, from_journal)
+        account = LazyAccount(self.w3, self.block_identifier, address)
 
-        if rlp_account:
-            account = rlp.decode(rlp_account, sedes=Account)
-        else:
-            account = Account()
         if from_journal:
             self._account_cache[address] = account
         return account
 
     def _set_account(self, address: Address, account: Account) -> None:
+        assert account is not None
+        print(f'setting account {account}')
         self._account_cache[address] = account
-        rlp_account = rlp.encode(account, sedes=Account)
-        self._journaltrie[address] = rlp_account
+        # rlp_account = rlp.encode(account, sedes=Account)
+        # self._journaltrie[address] = rlp_account
 
     def _reset_access_counters(self) -> None:
         # Account accesses and storage accesses recorded in the same journal
@@ -428,7 +448,6 @@ class AccountDB(AccountDatabaseAPI):
     #
     def record(self) -> JournalDBCheckpoint:
         checkpoint = self._journaldb.record()
-        self._journaltrie.record(checkpoint)
         self._journal_accessed_state.record(checkpoint)
 
         for _, store in self._dirty_account_stores():
@@ -436,8 +455,8 @@ class AccountDB(AccountDatabaseAPI):
         return checkpoint
 
     def discard(self, checkpoint: JournalDBCheckpoint) -> None:
+        print('DISCARDING...')
         self._journaldb.discard(checkpoint)
-        self._journaltrie.discard(checkpoint)
         self._journal_accessed_state.discard(checkpoint)
         self._account_cache.clear()
         for _, store in self._dirty_account_stores():
@@ -445,7 +464,6 @@ class AccountDB(AccountDatabaseAPI):
 
     def commit(self, checkpoint: JournalDBCheckpoint) -> None:
         self._journaldb.commit(checkpoint)
-        self._journaltrie.commit(checkpoint)
         self._journal_accessed_state.commit(checkpoint)
         for _, store in self._dirty_account_stores():
             store.commit(checkpoint)

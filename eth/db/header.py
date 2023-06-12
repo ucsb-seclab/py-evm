@@ -9,6 +9,7 @@ from typing import (
 from eth_typing import (
     BlockNumber,
     Hash32,
+    Address
 )
 from eth_utils import (
     ValidationError,
@@ -21,6 +22,7 @@ from eth_utils.toolz import (
     sliding_window,
 )
 import rlp
+from web3 import Web3
 
 from eth.abc import (
     AtomicDatabaseAPI,
@@ -48,6 +50,7 @@ from eth.exceptions import (
     HeaderNotFound,
     ParentNotFound,
 )
+from eth.rlp.headers import BlockHeader
 from eth.rlp.sedes import (
     chain_gaps,
 )
@@ -58,14 +61,23 @@ from eth.validation import (
     validate_block_number,
     validate_word,
 )
+from eth.vm.forks.arrow_glacier.blocks import ArrowGlacierBlockHeader
+from eth.vm.forks.london.blocks import LondonBlockHeader
+from eth.vm.forks.paris.blocks import ParisBlockHeader
+from eth.vm.forks.shanghai.blocks import ShanghaiBlockHeader
 from eth.vm.header import (
     HeaderSedes,
 )
-
+from web3.types import (
+    BlockIdentifier,
+)
 
 class HeaderDB(HeaderDatabaseAPI):
-    def __init__(self, db: AtomicDatabaseAPI) -> None:
-        self.db = db
+    w3: Web3
+
+    def __init__(self, w3: Web3) -> None:
+        assert w3 is not None
+        self.w3 = w3
 
     def get_header_chain_gaps(self) -> ChainGaps:
         return self._get_header_chain_gaps(self.db)
@@ -153,23 +165,26 @@ class HeaderDB(HeaderDatabaseAPI):
     # Header API
     #
     def get_block_header_by_hash(self, block_hash: Hash32) -> BlockHeaderAPI:
+        import pdb; pdb.set_trace()
+        assert self.w3 is not None
+        return build_block_header(self.w3, block_hash)
         return self._get_block_header_by_hash(self.db, block_hash)
 
-    @staticmethod
-    def _get_block_header_by_hash(
-        db: DatabaseAPI, block_hash: Hash32
-    ) -> BlockHeaderAPI:
-        """
-        Returns the requested block header as specified by block hash.
+    # @staticmethod
+    # def _get_block_header_by_hash(
+    #     db: DatabaseAPI, block_hash: Hash32
+    # ) -> BlockHeaderAPI:
+    #     """
+    #     Returns the requested block header as specified by block hash.
 
-        Raises BlockNotFound if it is not present in the db.
-        """
-        validate_word(block_hash, title="Block Hash")
-        try:
-            header_rlp = db[block_hash]
-        except KeyError:
-            raise HeaderNotFound(f"No header with hash {encode_hex(block_hash)} found")
-        return _decode_block_header(header_rlp)
+    #     Raises BlockNotFound if it is not present in the db.
+    #     """
+    #     validate_word(block_hash, title="Block Hash")
+    #     try:
+    #         header_rlp = db[block_hash]
+    #     except KeyError:
+    #         raise HeaderNotFound(f"No header with hash {encode_hex(block_hash)} found")
+    #     return _decode_block_header(header_rlp)
 
     def get_score(self, block_hash: Hash32) -> int:
         return self._get_score(self.db, block_hash)
@@ -645,15 +660,110 @@ class HeaderDB(HeaderDatabaseAPI):
         )
 
 
-# When performing a chain sync (either fast or regular modes), we'll very often need to
-# look up recent block headers to validate the chain, and decoding their RLP
-# representation is relatively expensive so we cache that here, but use a small cache
-# because we *should* only be looking up recent blocks.
-@functools.lru_cache(128)
-def _decode_block_header(header_rlp: bytes) -> BlockHeaderAPI:
-    # Use a deserialization class that can handle any type of header.
-    # This feels a little hack-y, but we don't know the shape of the header
-    # at this point. It could be a pre-London header, or a post-London
-    # header, which includes the base fee. So we use a class that knows how to
-    # decode both.
-    return rlp.decode(header_rlp, sedes=HeaderSedes)
+def build_block_header(w3: Web3, block_identifier: BlockIdentifier) -> BlockHeaderAPI:
+    """
+    Load a block header from geth in the format pyevm likes (not json)
+    """
+    assert w3 is not None
+
+    # stupid hack to avoid circular imports
+    from eth.chains.mainnet.constants import (
+        ARROW_GLACIER_MAINNET_BLOCK,
+        GRAY_GLACIER_MAINNET_BLOCK,
+        PARIS_MAINNET_BLOCK,
+        PETERSBURG_MAINNET_BLOCK,
+        LONDON_MAINNET_BLOCK,
+    )
+
+
+    # stupid, stupid thing -- there's no way to parse a heaer (in JSON form)
+    # directly into a BlockHeader object, so we have to do this.
+    # recall that different forks have different header types, so we need to
+    # get the right one
+
+    b = w3.eth.get_block(block_identifier)
+
+    block_number = b['number']
+    assert block_number >= PETERSBURG_MAINNET_BLOCK
+
+    base_args = {
+        'difficulty': b['difficulty'],
+        'extra_data': b['extraData'],
+        'gas_limit': b['gasLimit'],
+        'block_number': b['number'],
+        'gas_used': b['gasUsed'],
+        'timestamp': b['timestamp'],
+        'parent_hash': b['parentHash'],
+        'uncles_hash': b['sha3Uncles'],
+        'bloom': b['logsBloom'],
+        'transaction_root': b['transactionsRoot'],
+        'receipt_root': b['receiptsRoot'],
+        'coinbase': Address(bytes.fromhex(b['miner'][2:])),
+        'nonce': b['nonce'],
+        'state_root': b['stateRoot'],
+    }
+
+    if block_number < LONDON_MAINNET_BLOCK:
+        ret = BlockHeader(
+            **base_args,
+        )
+    elif block_number < ARROW_GLACIER_MAINNET_BLOCK:
+        ret = LondonBlockHeader(
+            **{
+                **base_args,
+                'base_fee_per_gas': b['baseFeePerGas'],
+            }
+        )
+    elif block_number < GRAY_GLACIER_MAINNET_BLOCK:
+        ret = ArrowGlacierBlockHeader(
+            **{
+                **base_args,
+                'base_fee_per_gas': b['baseFeePerGas'],
+            }
+        )
+    elif block_number < PARIS_MAINNET_BLOCK:
+        raise Exception("Gray Glacier not supported")
+    elif block_number < 17034870:
+        ret = ParisBlockHeader(
+            **{
+                **base_args,
+                'base_fee_per_gas': b['baseFeePerGas'],
+                'mix_hash': b['mixHash'],
+            }
+        )
+    else:
+        ret = ShanghaiBlockHeader(
+            **{
+                **base_args,
+                'base_fee_per_gas': b['baseFeePerGas'],
+                'mix_hash': b['mixHash'],
+            }
+        )
+    
+    return ret
+
+    # if hook is None:
+    #     return TargetVM
+
+    # TargetStateClass = TargetVM.get_state_class()
+
+
+    # ret = BlockHeader(
+    #     difficulty = b['difficulty'],
+    #     extra_data = b['extraData'],
+    #     gas_limit = b['gasLimit'],
+    #     block_number = b['number'],
+    #     gas_used = b['gasUsed'],
+    #     timestamp = b['timestamp'],
+    #     parent_hash = b['parentHash'],
+    #     uncles_hash = b['sha3Uncles'],
+    #     bloom = b['logsBloom'],
+    #     transaction_root = b['transactionsRoot'],
+    #     receipt_root = b['receiptsRoot'],
+    #     coinbase = b['miner'],
+    #     nonce = b['nonce'],
+    #     mix_hash = b['mixHash'],
+    #     state_root = b['stateRoot'],
+    # )
+    
+    return ret

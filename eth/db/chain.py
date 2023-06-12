@@ -22,6 +22,7 @@ from eth_utils import (
 from trie.exceptions import (
     MissingTrieNode,
 )
+from web3 import Web3
 
 from eth._warnings import (
     catch_and_ignore_import_warning,
@@ -100,8 +101,10 @@ class BlockDataKey(rlp.Serializable):
 
 
 class ChainDB(HeaderDB, ChainDatabaseAPI):
-    def __init__(self, db: AtomicDatabaseAPI) -> None:
-        self.db = db
+    w3: Web3
+
+    def __init__(self, w3: Web3) -> None:
+        self.w3 = w3
 
     def get_chain_gaps(self) -> ChainGaps:
         return self._get_chain_gaps(self.db)
