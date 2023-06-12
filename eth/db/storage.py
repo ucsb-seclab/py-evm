@@ -98,6 +98,10 @@ class StorageLookup(BaseDB):
     # each delete.
     _historical_write_tries: List[PendingWrites]
 
+    _w3: Web3
+    _block_identifier: BlockIdentifier
+    _address: Address
+
     def __init__(
             self,
             db: DatabaseAPI,
@@ -127,6 +131,7 @@ class StorageLookup(BaseDB):
         return self._db[k]
 
     def __setitem__(self, key: bytes, value: bytes) -> None:
+        raise NotImplementedError("StorageLookup does not support __setitem__")
         k = self._make_db_key(key)
         self._db[k] = value
 
@@ -196,6 +201,7 @@ class StorageLookup(BaseDB):
 
         :param trie_index: index for reviving the previous trie
         """
+        raise NotImplementedError("StorageLookup does not support rollback_trie")
 
         if trie_index >= len(self._historical_write_tries):
             raise ValidationError(
@@ -261,6 +267,8 @@ class AccountStorageDB(AccountStorageDatabaseAPI):
         In both _storage_cache and _journal_storage, Keys are set/retrieved as the
         big_endian encoding of the slot integer, and the rlp-encoded value.
         """
+        if bytes(address).hex() == '0221c903898e883e8c5a51a793768781cd7bbdcc':
+            print(f'Constructing AccountStorageDB for 0x0221c903898e883e8c5a51a793768781cd7bbdcc')
         self._address = address
         self._storage_lookup = StorageLookup(db, w3, block_identifier, address)
         self._storage_cache = CacheDB(self._storage_lookup)
@@ -288,14 +296,9 @@ class AccountStorageDB(AccountStorageDatabaseAPI):
         except KeyError:
             ret = 0
 
-        if bytes(self._address).hex().startswith('6a9e4959'):
-            print(f'{self._address.hex()} storage get {hex(slot)} = {hex(ret)}')
-
         return ret
 
     def set(self, slot: int, value: int) -> None:
-        if bytes(self._address).hex().startswith('6a9e4959'):
-            print(f'{self._address.hex()} storage set {hex(slot)} to {hex(value)}')
         key = int_to_big_endian(slot)
         if value:
             self._journal_storage[key] = value.to_bytes(32, 'big', signed=False)
@@ -311,9 +314,6 @@ class AccountStorageDB(AccountStorageDatabaseAPI):
                     del self._journal_storage[key]
 
     def delete(self) -> None:
-        if bytes(self._address).hex().startswith('6a9e4959'):
-            print(f'{self._address.hex()} storage DELETE')
-
         self.logger.debug2(
             "Deleting all storage in account 0x%s",
             self._address.hex(),
@@ -351,7 +351,7 @@ class AccountStorageDB(AccountStorageDatabaseAPI):
             self._clear_count.discard(checkpoint)
         else:
             # if the checkpoint comes before this account started tracking,
-            #    then simply reset to the beginning
+            #    then simply reset to the beginning (state persisted in remote db)
             self._journal_storage.reset()
             self._clear_count.reset()
         self._storage_cache.reset_cache()
@@ -359,10 +359,11 @@ class AccountStorageDB(AccountStorageDatabaseAPI):
         reverted_clear_count = to_int(self._clear_count[CLEAR_COUNT_KEY_NAME])
 
         if reverted_clear_count == latest_clear_count - 1:
-            # This revert rewinds past a trie deletion, so roll back to the trie at
-            #   that point. We use the clear count as an index to get back to the
-            #   old base trie.
-            self._storage_lookup.rollback_trie(reverted_clear_count)
+            # This revert rewinds past a trie deletion (i.e., account deletion),
+            # I think we don't need to do anything here, because we only use the journal
+            #  to track storage changes
+            # self._storage_lookup.rollback_trie(reverted_clear_count)
+            pass
         elif reverted_clear_count == latest_clear_count:
             # No change in the base trie, take no action
             pass

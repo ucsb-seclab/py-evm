@@ -68,12 +68,10 @@ class LazyAccount(AccountAPI):
 
     def __init__(
             self,
-            journaldb: JournalDB,
             web3: Web3,
             block_identifier: BlockIdentifier,
             address: Address,
     ) -> None:
-        self._journaldb = journaldb
         self._web3 = web3
         self._block_identifier = block_identifier
         self._address = address
@@ -87,11 +85,6 @@ class LazyAccount(AccountAPI):
             )
         return self._nonce
 
-    @nonce.setter
-    def nonce(self, value: big_endian_int) -> None:
-        self._nonce = value
-
-
     @property
     def balance(self) -> big_endian_int:
         if self._balance is None:
@@ -100,10 +93,6 @@ class LazyAccount(AccountAPI):
                 block_identifier=self._block_identifier,
             )
         return self._balance
-
-    @balance.setter
-    def balance(self, value: big_endian_int) -> None:
-        self._balance = value
 
     @property
     def storage_root(self) -> trie_root:
@@ -119,8 +108,6 @@ class LazyAccount(AccountAPI):
             block_identifier=self._block_identifier,
             address=self._address,
         )
-        if 'nonce' in kwargs:
-            print(f'{self._address.hex()} copying nonce={kwargs["nonce"]}')
         ret._nonce = kwargs.get('nonce', self._nonce)
         ret._balance = kwargs.get('balance', self._balance)
 

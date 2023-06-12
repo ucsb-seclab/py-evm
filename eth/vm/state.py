@@ -138,11 +138,9 @@ class BaseState(Configurable, StateAPI):
         return self._account_db.set_storage(address, slot, value)
 
     def delete_storage(self, address: Address) -> None:
-        print('delete_storage', address.hex())
         self._account_db.delete_storage(address)
 
     def delete_account(self, address: Address) -> None:
-        print('delete_account', address.hex())
         self._account_db.delete_account(address)
 
     def get_balance(self, address: Address) -> int:
