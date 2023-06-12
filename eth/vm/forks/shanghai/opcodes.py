@@ -55,6 +55,11 @@ UPDATED_OPCODES: Dict[int, OpcodeAPI] = {
         ),
     ),
 }
+# deprecate_method() does not preserve attributes, so we need to manually copy them over.
+_selfdestruct = PARIS_OPCODES[opcode_values.SELFDESTRUCT]
+UPDATED_OPCODES[opcode_values.SELFDESTRUCT].mnemonic = _selfdestruct.mnemonic
+UPDATED_OPCODES[opcode_values.SELFDESTRUCT].gas_cost = _selfdestruct.gas_cost
+
 
 NEW_OPCODES: Dict[int, OpcodeAPI] = {
     opcode_values.PUSH0: as_opcode(

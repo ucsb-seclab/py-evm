@@ -31,6 +31,7 @@ from eth_utils import (
     encode_hex,
 )
 import rlp
+from web3 import Web3
 
 from eth._utils.datatypes import (
     Configurable,
@@ -92,6 +93,9 @@ from eth.vm.interrupt import (
 from eth.vm.message import (
     Message,
 )
+from web3.types import (
+    BlockIdentifier,
+)
 
 if TYPE_CHECKING:
     from eth.typing import (  # noqa: F401
@@ -109,6 +113,8 @@ class VM(Configurable, VirtualMachineAPI):
 
     _state = None
     _block = None
+    _web3: Web3 = None
+    _block_identifier: BlockIdentifier = None
 
     cls_logger = logging.getLogger("eth.vm.base.VM")
 
@@ -118,10 +124,14 @@ class VM(Configurable, VirtualMachineAPI):
         chaindb: ChainDatabaseAPI,
         chain_context: ChainContextAPI,
         consensus_context: ConsensusContextAPI,
+        web3: Web3,
+        block_identifier: BlockIdentifier = None,
     ) -> None:
         self.chaindb = chaindb
         self.chain_context = chain_context
         self.consensus_context = consensus_context
+        self._web3 = web3
+        self._block_identifier = block_identifier
         self._initial_header = header
 
     def get_header(self) -> BlockHeaderAPI:
@@ -142,7 +152,8 @@ class VM(Configurable, VirtualMachineAPI):
     def state(self) -> StateAPI:
         if self._state is None:
             self._state = self.build_state(
-                self.chaindb.db,
+                self._web3,
+                self._block_identifier,
                 self.get_header(),
                 self.chain_context,
                 self.previous_hashes,
@@ -152,7 +163,8 @@ class VM(Configurable, VirtualMachineAPI):
     @classmethod
     def build_state(
         cls,
-        db: AtomicDatabaseAPI,
+        web3: Web3,
+        block_identifier: BlockIdentifier,
         header: BlockHeaderAPI,
         chain_context: ChainContextAPI,
         previous_hashes: Iterable[Hash32] = (),
@@ -160,7 +172,7 @@ class VM(Configurable, VirtualMachineAPI):
         execution_context = cls.create_execution_context(
             header, previous_hashes, chain_context
         )
-        return cls.get_state_class()(db, execution_context, header.state_root)
+        return cls.get_state_class()(web3, block_identifier, execution_context)
 
     @cached_property
     def _consensus(self) -> ConsensusAPI:
@@ -562,12 +574,18 @@ class VM(Configurable, VirtualMachineAPI):
         if last_block_hash == GENESIS_PARENT_HASH:
             return
 
-        block_header = get_block_header_by_hash(last_block_hash, chaindb)
+        # stupid - but we need to import this here to avoid circular imports
+        # and I don't want to refactor the whole module right now.
+        from eth.db.header import build_block_header
+
+
+        block_header = build_block_header(chaindb.w3, last_block_hash)
 
         for _ in range(MAX_PREV_HEADER_DEPTH):
-            yield block_header.hash
+            yield last_block_hash
             try:
-                block_header = get_parent_header(block_header, chaindb)
+                last_block_hash = block_header.parent_hash
+                block_header = build_block_header(chaindb.w3, block_header.parent_hash)
             except (IndexError, HeaderNotFound):
                 break
 

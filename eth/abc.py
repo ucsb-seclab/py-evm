@@ -31,12 +31,14 @@ from eth_keys.datatypes import (
 )
 from eth_typing import (
     Address,
+    BlockIdentifier,
     BlockNumber,
     Hash32,
 )
 from eth_utils import (
     ExtendedDebugLogger,
 )
+from web3 import Web3
 
 from eth.constants import (
     BLANK_ROOT_HASH,
@@ -1189,6 +1191,7 @@ class ChainDatabaseAPI(HeaderDatabaseAPI):
     A class representing a database for chain data. This class is derived from
     :class:`~eth.abc.HeaderDatabaseAPI`.
     """
+    w3: Web3
 
     #
     # Header API
@@ -2826,9 +2829,9 @@ class StateAPI(ConfigurableAPI):
     @abstractmethod
     def __init__(
         self,
-        db: AtomicDatabaseAPI,
+        web3: Web3,
+        block_identifier: BlockIdentifier,
         execution_context: ExecutionContextAPI,
-        state_root: bytes,
     ) -> None:
         """
         Initialize the state.
