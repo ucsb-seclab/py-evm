@@ -139,8 +139,6 @@ class Create(Opcode):
         creation_nonce = computation.state.get_nonce(computation.msg.storage_address)
         computation.state.increment_nonce(computation.msg.storage_address)
 
-        print(f'CREATE address={computation.msg.storage_address.hex()} nonce={creation_nonce}')
-
         contract_address = generate_contract_address(
             computation.msg.storage_address,
             creation_nonce,
@@ -241,7 +239,6 @@ class CreateEIP150(Create):
 
 class CreateByzantium(CreateEIP150):
     def __call__(self, computation: ComputationAPI) -> None:
-        print('creating ', computation.msg.storage_address.hex())
         if computation.msg.is_static:
             raise WriteProtection(
                 "Cannot modify state while inside of a STATICCALL context"

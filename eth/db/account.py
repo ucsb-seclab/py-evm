@@ -141,7 +141,6 @@ class AccountDB(AccountDatabaseAPI):
         AccountDB synchronizes the snapshot/revert/persist of both of the
         journals.
         """
-        print('making fresh account db')
         self.w3 = w3
         self.block_identifier = block_identifier
         self._journaldb = JournalDB(KeyAccessLoggerAtomicDB(MemoryDB()))
@@ -295,7 +294,6 @@ class AccountDB(AccountDatabaseAPI):
 
         account = self._get_account(address)
         self._set_account(address, account.copy(nonce=nonce))
-        print(f'setting {address.hex()} nonce to {nonce}')
 
     def increment_nonce(self, address: Address) -> None:
         current_nonce = self.get_nonce(address)
@@ -338,9 +336,9 @@ class AccountDB(AccountDatabaseAPI):
 
         account = self._get_account(address)
 
-        code_hash = keccak(code)
-        self._journaldb[code_hash] = code
-        self._set_account(address, account.copy(code_hash=code_hash))
+        bkey = address + b"code"
+        self._journaldb[bkey] = code
+        # self._set_account(address, account.copy(code_hash=code_hash))
 
     def get_code_hash(self, address: Address) -> Hash32:
         validate_canonical_address(address, title="Storage Address")
@@ -420,8 +418,11 @@ class AccountDB(AccountDatabaseAPI):
         return b'account:' + address
 
     def _get_account(self, address: Address, from_journal: bool = True) -> Account:
-        if from_journal and address in self._account_cache:
-            return self._account_cache[address]
+        if from_journal:
+            if address in self._account_cache:
+                return self._account_cache[address]
+            if address in self._journaldb:
+                return self._journaldb[address]
 
         account = LazyAccount(self.w3, self.block_identifier, address)
 
@@ -431,10 +432,8 @@ class AccountDB(AccountDatabaseAPI):
 
     def _set_account(self, address: Address, account: Account) -> None:
         assert account is not None
-        print(f'setting account {account}')
+        self._journaldb[address] = account
         self._account_cache[address] = account
-        # rlp_account = rlp.encode(account, sedes=Account)
-        # self._journaltrie[address] = rlp_account
 
     def _reset_access_counters(self) -> None:
         # Account accesses and storage accesses recorded in the same journal
@@ -455,7 +454,6 @@ class AccountDB(AccountDatabaseAPI):
         return checkpoint
 
     def discard(self, checkpoint: JournalDBCheckpoint) -> None:
-        print('DISCARDING...')
         self._journaldb.discard(checkpoint)
         self._journal_accessed_state.discard(checkpoint)
         self._account_cache.clear()

@@ -183,12 +183,8 @@ class Journal(BaseDB):
                     self._current_values.pop(old_key, None)
                 elif old_value is DELETE_WRAPPED:
                     self._current_values[old_key] = old_value
-                elif type(old_value) is bytes:
-                    self._current_values[old_key] = old_value
                 else:
-                    raise ValidationError(
-                        f"Unexpected value, must be bytes: {old_value!r}"
-                    )
+                    self._current_values[old_key] = old_value
 
             if checkpoint_id in self._clears_at:
                 self._clears_at.remove(checkpoint_id)
