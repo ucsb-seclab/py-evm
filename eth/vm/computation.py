@@ -120,6 +120,8 @@ class BaseComputation(ComputationAPI, Configurable):
     return_data: bytes = b""
     accounts_to_delete: Dict[Address, Address] = None
 
+    invalid_opcode_class: Type[OpcodeAPI] = InvalidOpcode
+
     _memory: MemoryAPI = None
     _stack: StackAPI = None
     _gas_meter: GasMeterAPI = None
@@ -345,7 +347,7 @@ class BaseComputation(ComputationAPI, Configurable):
                 try:
                     opcode_fn = opcode_lookup[opcode]
                 except KeyError:
-                    opcode_fn = InvalidOpcode(opcode)
+                    opcode_fn = computation.invalid_opcode_class(opcode)
 
                 if show_debug2:
                     # We dig into some internals for debug logs

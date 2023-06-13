@@ -62,6 +62,7 @@ from eth.validation import (
     validate_word,
 )
 from eth.vm.forks.arrow_glacier.blocks import ArrowGlacierBlockHeader
+from eth.vm.forks.gray_glacier.blocks import GrayGlacierBlockHeader
 from eth.vm.forks.london.blocks import LondonBlockHeader
 from eth.vm.forks.paris.blocks import ParisBlockHeader
 from eth.vm.forks.shanghai.blocks import ShanghaiBlockHeader
@@ -722,7 +723,13 @@ def build_block_header(w3: Web3, block_identifier: BlockIdentifier) -> BlockHead
             }
         )
     elif block_number < PARIS_MAINNET_BLOCK:
-        raise Exception("Gray Glacier not supported")
+        ret = GrayGlacierBlockHeader(
+            **{
+                **base_args,
+                'base_fee_per_gas': b['baseFeePerGas'],
+                'mix_hash': b['mixHash'],
+            }
+        )
     elif block_number < 17034870:
         ret = ParisBlockHeader(
             **{

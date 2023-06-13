@@ -8,6 +8,7 @@ from eth.vm.opcode import (
     Opcode,
 )
 
+INVALID_OPCODE_MAGIC_VAL = -0x1
 
 class InvalidOpcode(Opcode):
     mnemonic = "INVALID"

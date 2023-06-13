@@ -315,7 +315,7 @@ class AccountDB(AccountDatabaseAPI):
         
         if ret != b"":
             self._accessed_bytecodes.add(address)
-        
+
         return ret
 
         # code_hash = self.get_code_hash(address)
@@ -334,7 +334,7 @@ class AccountDB(AccountDatabaseAPI):
         validate_canonical_address(address, title="Storage Address")
         validate_is_bytes(code, title="Code")
 
-        account = self._get_account(address)
+        # account = self._get_account(address)
 
         bkey = address + b"code"
         self._journaldb[bkey] = code
@@ -350,8 +350,12 @@ class AccountDB(AccountDatabaseAPI):
     def delete_code(self, address: Address) -> None:
         validate_canonical_address(address, title="Storage Address")
 
-        account = self._get_account(address)
-        self._set_account(address, account.copy(code_hash=EMPTY_SHA3))
+        # set code to empty
+        key = address + b"code"
+        self._journaldb[key] = b""
+
+        # account = self._get_account(address)
+        # self._set_account(address, account.copy(code_hash=EMPTY_SHA3))
 
     #
     # Account Methods
@@ -370,6 +374,10 @@ class AccountDB(AccountDatabaseAPI):
 
         if address in self._account_cache:
             del self._account_cache[address]
+
+        # set code to empty
+        key = address + b"code"
+        self._journaldb[key] = b""
 
     def account_exists(self, address: Address) -> bool:
         validate_canonical_address(address, title="Storage Address")
