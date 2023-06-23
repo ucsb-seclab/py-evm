@@ -685,8 +685,7 @@ def build_block_header(w3: Web3, block_identifier: BlockIdentifier) -> BlockHead
     b = w3.eth.get_block(block_identifier)
 
     block_number = b['number']
-    assert block_number >= PETERSBURG_MAINNET_BLOCK
-
+    
     base_args = {
         'difficulty': b['difficulty'],
         'extra_data': b['extraData'],
@@ -703,6 +702,18 @@ def build_block_header(w3: Web3, block_identifier: BlockIdentifier) -> BlockHead
         'nonce': b['nonce'],
         'state_root': b['stateRoot'],
     }
+
+    # For Sepolia, let's just use the latest block header for now
+    if w3.eth.chain_id == 11155111:
+        return ShanghaiBlockHeader(
+            **{
+                **base_args,
+                'base_fee_per_gas': b['baseFeePerGas'],
+                'mix_hash': b['mixHash'],
+            }
+        )
+    
+    assert block_number >= PETERSBURG_MAINNET_BLOCK
 
     if block_number < LONDON_MAINNET_BLOCK:
         ret = BlockHeader(
