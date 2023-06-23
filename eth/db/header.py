@@ -705,11 +705,19 @@ def build_block_header(w3: Web3, block_identifier: BlockIdentifier) -> BlockHead
 
     # For Sepolia, let's just use the latest block header for now
     if w3.eth.chain_id == 11155111:
-        return ShanghaiBlockHeader(
+        if block_number >= 2990908:
+            return ShanghaiBlockHeader(
+                **{
+                    **base_args,
+                    'base_fee_per_gas': b['baseFeePerGas'],
+                    'mix_hash': b['mixHash'],
+                }
+            )
+        else:
+            return LondonBlockHeader(
             **{
                 **base_args,
                 'base_fee_per_gas': b['baseFeePerGas'],
-                'mix_hash': b['mixHash'],
             }
         )
     
