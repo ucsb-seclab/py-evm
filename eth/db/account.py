@@ -463,7 +463,12 @@ class AccountDB(AccountDatabaseAPI):
 
     def discard(self, checkpoint: JournalDBCheckpoint) -> None:
         self._journaldb.discard(checkpoint)
-        self._journal_accessed_state.discard(checkpoint)
+        try:
+            self._journal_accessed_state.discard(checkpoint)
+        except ValidationError as e:
+            # ignore missing checkpoint errors
+            if 'No checkpoint' not in str(e):
+                raise
         self._account_cache.clear()
         for _, store in self._dirty_account_stores():
             store.discard(checkpoint)
