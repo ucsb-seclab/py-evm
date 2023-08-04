@@ -3772,7 +3772,7 @@ class VirtualMachineAPI(ConfigurableAPI):
     @abstractmethod
     def validate_block(self, block: BlockAPI) -> None:
         """
-        Validate the the given block.
+        Validate the given block.
         """
         ...
 

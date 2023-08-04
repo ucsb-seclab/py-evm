@@ -14,7 +14,7 @@ extras_require = {
         "eth-typing>=3.3.0,<4.0.0",
         "eth-utils>=2.0.0,<3.0.0",
         "lru-dict>=1.1.6",
-        "mypy_extensions>=1.0.0",
+        "mypy-extensions>=1.0.0",
         "py-ecc>=1.4.7,<7.0.0",
         "pyethash>=0.1.27,<1.0.0",
         "rlp>=3,<4",
@@ -98,7 +98,7 @@ with open("README.md") as readme_file:
 setup(
     name="py-evm",
     # *IMPORTANT*: Don't manually change the version here. Use the 'bumpversion' utility.
-    version="0.7.0-alpha.3",
+    version="0.7.0-alpha.4",
     description="Python implementation of the Ethereum Virtual Machine",
     long_description=long_description,
     long_description_content_type="text/markdown",
