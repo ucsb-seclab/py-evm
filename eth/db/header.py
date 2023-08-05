@@ -166,10 +166,8 @@ class HeaderDB(HeaderDatabaseAPI):
     # Header API
     #
     def get_block_header_by_hash(self, block_hash: Hash32) -> BlockHeaderAPI:
-        import pdb; pdb.set_trace()
         assert self.w3 is not None
         return build_block_header(self.w3, block_hash)
-        return self._get_block_header_by_hash(self.db, block_hash)
 
     # @staticmethod
     # def _get_block_header_by_hash(
